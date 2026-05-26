@@ -1,0 +1,128 @@
+:root {
+  color-scheme: dark;
+  background: #141414;
+}
+
+html,
+body {
+  min-height: 100%;
+  margin: 0;
+  background: #141414;
+}
+
+body {
+  overflow: clip;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+a {
+  color: inherit;
+}
+
+.landing-page {
+  display: grid;
+  width: 100vw;
+  min-height: 100svh;
+  place-items: center;
+  padding: clamp(24px, 5vw, 72px);
+  background:
+    linear-gradient(rgba(20, 20, 20, 0.88), rgba(20, 20, 20, 0.88)),
+    linear-gradient(90deg, rgba(70, 190, 237, 0.16) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(70, 190, 237, 0.11) 1px, transparent 1px), #141414;
+  background-size:
+    auto,
+    64px 64px,
+    64px 64px;
+}
+
+.landing-stack {
+  display: grid;
+  width: min(82vw, 760px);
+  justify-items: center;
+  gap: clamp(18px, 4svh, 38px);
+}
+
+.landing-logo {
+  display: block;
+  width: min(78vw, 700px);
+  max-width: calc(100vw - 48px);
+  max-height: min(62svh, 540px);
+  height: auto;
+  object-fit: contain;
+}
+
+.landing-cta {
+  display: inline-grid;
+  min-width: 148px;
+  min-height: 48px;
+  place-items: center;
+  border: 1px solid rgba(70, 190, 237, 0.82);
+  border-bottom-width: 3px;
+  padding: 0 28px;
+  background: rgba(20, 20, 20, 0.82);
+  box-shadow: 6px 6px 0 rgba(214, 42, 136, 0.62);
+  color: #f7fbff;
+  font-family:
+    'Berkeley Mono', 'JetBrains Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, Consolas,
+    'Liberation Mono', monospace;
+  font-size: 0.88rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1;
+  text-decoration: none;
+  transition:
+    background 0.16s ease,
+    box-shadow 0.16s ease,
+    color 0.16s ease,
+    transform 0.16s ease;
+}
+
+.landing-cta:hover {
+  background: #48c5f4;
+  box-shadow: 8px 8px 0 rgba(214, 42, 136, 0.72);
+  color: #141414;
+  transform: translate(-2px, -2px);
+}
+
+.landing-cta:focus-visible {
+  outline: 2px solid #f7fbff;
+  outline-offset: 5px;
+}
+
+@media (max-height: 620px) {
+  .landing-page {
+    padding-block: 18px;
+  }
+
+  .landing-stack {
+    gap: 16px;
+  }
+
+  .landing-logo {
+    width: min(70vw, 520px);
+    max-height: 52svh;
+  }
+}
+
+@media (max-width: 520px) {
+  .landing-page {
+    padding: 22px;
+  }
+
+  .landing-stack {
+    width: 100%;
+  }
+
+  .landing-logo {
+    width: min(86vw, 430px);
+    max-width: 100%;
+  }
+
+  .landing-cta {
+    min-width: 136px;
+    min-height: 46px;
+  }
+}

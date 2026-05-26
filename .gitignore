@@ -1,0 +1,10 @@
+node_modules
+.git-local
+dist
+.output
+output
+tmp
+.playwright-cli
+.wrangler
+worker-configuration.d.ts
+*.local

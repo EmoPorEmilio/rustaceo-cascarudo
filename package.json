@@ -1,0 +1,37 @@
+{
+  "name": "rustaceocascarudo",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "scripts": {
+    "dev": "vp dev",
+    "refresh:wasm": "sh scripts/build-bagr-wasm.sh",
+    "build": "NODE_ENV=production vp build && vp check",
+    "preview": "vp preview",
+    "check": "vp check",
+    "check:fix": "vp check --fix",
+    "deploy": "vp run build && wrangler deploy",
+    "cf-typegen": "wrangler types",
+    "prepare": "vp config"
+  },
+  "dependencies": {
+    "@tanstack/solid-router": "1.168.6",
+    "@tanstack/solid-start": "1.167.11",
+    "solid-js": "1.9.12"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "1.30.2",
+    "@types/node": "22.19.15",
+    "typescript": "5.9.3",
+    "vite": "npm:@voidzero-dev/vite-plus-core@latest",
+    "vite-plugin-solid": "2.11.11",
+    "vite-plus": "0.1.22",
+    "wrangler": "4.78.0"
+  },
+  "packageManager": "pnpm@11.0.8",
+  "pnpm": {
+    "overrides": {
+      "vite": "npm:@voidzero-dev/vite-plus-core@latest"
+    }
+  }
+}
