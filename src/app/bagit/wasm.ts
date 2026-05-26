@@ -69,6 +69,7 @@ const bagName = 'rustaceo-cascarudo-bag';
 const zipMimeType = 'application/zip';
 const utf8Encoder = new TextEncoder();
 const utf8Decoder = new TextDecoder();
+const strictUtf8Decoder = new TextDecoder('utf-8', { fatal: true });
 let bagrWasmPromise: Promise<BagrWasmModule> | undefined;
 let crcTable: Uint32Array | undefined;
 
@@ -100,6 +101,7 @@ export async function createBag(files: readonly BagitInputFile[]): Promise<Bagit
     bagging_date: new Date().toISOString().slice(0, 10),
     software_agent: 'Rustaceo Cascarudo / bagr-wasm',
   });
+  await repairCreatedBagManifests(sink.files);
 
   return {
     fileName: `${bagName}.zip`,
@@ -504,7 +506,338 @@ function stripCommonBagRootFromMap(rawFiles: ReadonlyMap<string, Uint8Array>) {
     files.set(root ? path.slice(root.length) : path, data);
   }
 
-  return files;
+  return repairManifestEncodingAliases(files);
+}
+
+function repairManifestEncodingAliases(files: ReadonlyMap<string, Uint8Array>) {
+  const encoding = readBagitEncoding(files.get('bagit.txt')) || 'UTF-8';
+  const declaredPaths = readManifestDeclaredPaths(files, encoding);
+  if (!declaredPaths.size) return files;
+
+  const repairedFiles = new Map(files);
+
+  for (const declaredPath of declaredPaths) {
+    if (repairedFiles.has(declaredPath)) continue;
+
+    const zipPath = repairMojibakeUtf8(declaredPath);
+    if (!zipPath || zipPath === declaredPath) continue;
+
+    const file = repairedFiles.get(zipPath);
+    if (!file) continue;
+
+    // Some manifests contain UTF-8 path bytes decoded as Latin-1/Windows-1252.
+    // Keep validation aligned with that manifest path while reading the real ZIP entry bytes.
+    repairedFiles.set(declaredPath, file);
+    if (!declaredPaths.has(zipPath)) repairedFiles.delete(zipPath);
+  }
+
+  return repairedFiles;
+}
+
+async function repairCreatedBagManifests(files: Map<string, Uint8Array>) {
+  let changed = false;
+
+  for (const [path, bytes] of Array.from(files)) {
+    if (!isPayloadManifestPath(path)) continue;
+
+    const repaired = repairCreatedPayloadManifest(bytes, files);
+    if (!repaired) continue;
+
+    files.set(path, repaired);
+    changed = true;
+  }
+
+  if (!changed) return;
+
+  for (const [path, bytes] of Array.from(files)) {
+    if (!isTagManifestPath(path)) continue;
+
+    files.set(path, await recalculateTagManifest(path, bytes, files));
+  }
+}
+
+function repairCreatedPayloadManifest(bytes: Uint8Array, files: ReadonlyMap<string, Uint8Array>) {
+  const lines: string[] = [];
+  let changed = false;
+
+  for (const rawLine of utf8Decoder.decode(bytes).split('\n')) {
+    const line = rawLine.trimEnd();
+    if (!line.trim()) continue;
+
+    const match = /^(\S+)\s+(.+)$/.exec(line);
+    if (!match) {
+      lines.push(line);
+      continue;
+    }
+
+    const checksum = match[1];
+    const storedPath = match[2].trimStart();
+    const manifestPath = normalizeSourcePath(decodeManifestPath(storedPath));
+    const repairedPath = repairMojibakeUtf8(manifestPath);
+    const path =
+      repairedPath && repairedPath !== manifestPath && files.has(repairedPath)
+        ? repairedPath
+        : manifestPath;
+
+    if (path !== manifestPath) changed = true;
+    lines.push(`${checksum}  ${encodeManifestPath(path)}`);
+  }
+
+  return changed ? utf8Encoder.encode(`${lines.join('\n')}\n`) : undefined;
+}
+
+async function recalculateTagManifest(
+  path: string,
+  bytes: Uint8Array,
+  files: ReadonlyMap<string, Uint8Array>,
+) {
+  const digestAlgorithm = digestAlgorithmForTagManifest(path);
+  if (!digestAlgorithm) {
+    throw new Error(`Cannot recalculate unsupported tag manifest: ${path}`);
+  }
+
+  const lines: string[] = [];
+
+  for (const rawLine of utf8Decoder.decode(bytes).split('\n')) {
+    const line = rawLine.trimEnd();
+    if (!line.trim()) continue;
+
+    const match = /^\S+\s+(.+)$/.exec(line);
+    if (!match) {
+      lines.push(line);
+      continue;
+    }
+
+    const tagPath = normalizeSourcePath(decodeManifestPath(match[1].trimStart()));
+    const tagBytes = files.get(tagPath);
+    if (!tagBytes) {
+      lines.push(line);
+      continue;
+    }
+
+    lines.push(`${await digestHex(digestAlgorithm, tagBytes)}  ${encodeManifestPath(tagPath)}`);
+  }
+
+  return utf8Encoder.encode(`${lines.join('\n')}\n`);
+}
+
+function readBagitEncoding(bytes: Uint8Array | undefined) {
+  if (!bytes) return '';
+
+  for (const rawLine of utf8Decoder.decode(bytes).split('\n')) {
+    const [field, ...valueParts] = rawLine.trimEnd().split(':');
+    if (field === 'Tag-File-Character-Encoding') return valueParts.join(':').trim();
+  }
+
+  return '';
+}
+
+function isLatin1LikeTagEncoding(encoding: string) {
+  const normalized = normalizeEncodingName(encoding);
+  return (
+    normalized === 'iso88591' ||
+    normalized === 'latin1' ||
+    normalized === 'cp1252' ||
+    normalized === 'windows1252'
+  );
+}
+
+function normalizeEncodingName(encoding: string) {
+  return Array.from(encoding)
+    .filter((char) => /[a-z0-9]/i.test(char))
+    .join('')
+    .toLowerCase();
+}
+
+function readManifestDeclaredPaths(files: ReadonlyMap<string, Uint8Array>, encoding: string) {
+  const paths = new Set<string>();
+
+  for (const [path, bytes] of files) {
+    if (!isManifestPath(path)) continue;
+
+    const text = decodeTagBytesForAliasRepair(bytes, encoding);
+    for (const rawLine of text.split('\n')) {
+      const line = rawLine.trimEnd();
+      if (!line.trim()) continue;
+
+      const match = /^\S+\s+(.+)$/.exec(line);
+      if (!match) continue;
+
+      paths.add(normalizeSourcePath(decodeManifestPath(match[1].trimStart())));
+    }
+  }
+
+  return paths;
+}
+
+function isManifestPath(path: string) {
+  return isPayloadManifestPath(path) || isTagManifestPath(path);
+}
+
+function isPayloadManifestPath(path: string) {
+  return !path.includes('/') && path.endsWith('.txt') && path.startsWith('manifest-');
+}
+
+function isTagManifestPath(path: string) {
+  return !path.includes('/') && path.endsWith('.txt') && path.startsWith('tagmanifest-');
+}
+
+function decodeTagBytesForAliasRepair(bytes: Uint8Array, encoding: string) {
+  const normalized = normalizeEncodingName(encoding);
+  if (isLatin1LikeTagEncoding(encoding)) {
+    return Array.from(bytes, (byte) => String.fromCharCode(byte)).join('');
+  }
+  if (normalized === 'utf16' || normalized === 'utf16be' || normalized === 'utf16le') {
+    return decodeUtf16TagBytes(bytes, normalized.endsWith('le'));
+  }
+  return utf8Decoder.decode(bytes);
+}
+
+function decodeManifestPath(path: string) {
+  return path.replace(/%0A/gi, '\n').replace(/%0D/gi, '\r');
+}
+
+function encodeManifestPath(path: string) {
+  return Array.from(path, (char) => (char === '\n' ? '%0A' : char === '\r' ? '%0D' : char)).join(
+    '',
+  );
+}
+
+function repairMojibakeUtf8(path: string) {
+  const bytes = mojibakeBytes(path);
+  if (!bytes) return '';
+
+  try {
+    return normalizeSourcePath(strictUtf8Decoder.decode(bytes));
+  } catch {
+    return '';
+  }
+}
+
+function mojibakeBytes(path: string) {
+  const bytes: number[] = [];
+
+  for (const char of path) {
+    const codePoint = char.codePointAt(0);
+    if (codePoint === undefined) return undefined;
+
+    if (codePoint <= 0xff) {
+      bytes.push(codePoint);
+      continue;
+    }
+
+    const byte = windows1252Byte(codePoint);
+    if (byte === undefined) return undefined;
+    bytes.push(byte);
+  }
+
+  return Uint8Array.from(bytes);
+}
+
+function windows1252Byte(codePoint: number) {
+  switch (codePoint) {
+    case 0x20ac:
+      return 0x80;
+    case 0x201a:
+      return 0x82;
+    case 0x0192:
+      return 0x83;
+    case 0x201e:
+      return 0x84;
+    case 0x2026:
+      return 0x85;
+    case 0x2020:
+      return 0x86;
+    case 0x2021:
+      return 0x87;
+    case 0x02c6:
+      return 0x88;
+    case 0x2030:
+      return 0x89;
+    case 0x0160:
+      return 0x8a;
+    case 0x2039:
+      return 0x8b;
+    case 0x0152:
+      return 0x8c;
+    case 0x017d:
+      return 0x8e;
+    case 0x2018:
+      return 0x91;
+    case 0x2019:
+      return 0x92;
+    case 0x201c:
+      return 0x93;
+    case 0x201d:
+      return 0x94;
+    case 0x2022:
+      return 0x95;
+    case 0x2013:
+      return 0x96;
+    case 0x2014:
+      return 0x97;
+    case 0x02dc:
+      return 0x98;
+    case 0x2122:
+      return 0x99;
+    case 0x0161:
+      return 0x9a;
+    case 0x203a:
+      return 0x9b;
+    case 0x0153:
+      return 0x9c;
+    case 0x017e:
+      return 0x9e;
+    case 0x0178:
+      return 0x9f;
+    default:
+      return undefined;
+  }
+}
+
+function decodeUtf16TagBytes(bytes: Uint8Array, defaultLittleEndian: boolean) {
+  let offset = 0;
+  let littleEndian = defaultLittleEndian;
+
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) {
+    offset = 2;
+    littleEndian = false;
+  } else if (bytes[0] === 0xff && bytes[1] === 0xfe) {
+    offset = 2;
+    littleEndian = true;
+  }
+
+  let text = '';
+  for (let index = offset; index + 1 < bytes.length; index += 2) {
+    const unit = littleEndian
+      ? bytes[index] | (bytes[index + 1] << 8)
+      : (bytes[index] << 8) | bytes[index + 1];
+    text += String.fromCharCode(unit);
+  }
+
+  return text;
+}
+
+function digestAlgorithmForTagManifest(path: string) {
+  const normalized = normalizeEncodingName(path.slice('tagmanifest-'.length, -'.txt'.length));
+
+  switch (normalized) {
+    case 'sha1':
+      return 'SHA-1';
+    case 'sha256':
+      return 'SHA-256';
+    case 'sha384':
+      return 'SHA-384';
+    case 'sha512':
+      return 'SHA-512';
+    default:
+      return '';
+  }
+}
+
+async function digestHex(algorithm: string, bytes: Uint8Array) {
+  const digest = await crypto.subtle.digest(algorithm, toArrayBuffer(bytes));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 function commonBagRoot(paths: readonly string[]) {
@@ -602,6 +935,12 @@ function assertZip32(value: number, label: string) {
 }
 
 function toBlobPart(bytes: Uint8Array): BlobPart {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
+function toArrayBuffer(bytes: Uint8Array) {
   const copy = new Uint8Array(bytes.byteLength);
   copy.set(bytes);
   return copy.buffer;

@@ -21,3 +21,13 @@ CARGO_TARGET_DIR="$TARGET_DIR" wasm-pack build "$BAGR_WASM_DIR" \
   --out-name bagr_wasm \
   --release \
   --no-pack
+
+SOURCE_COMMIT=$(git -C "$BAGR_WASM_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+cat > "$OUT_DIR/BAGR_WASM_SOURCE.txt" <<EOF
+Generated from ../bagr-wasm at commit $SOURCE_COMMIT.
+
+This package is copied into the app so Cloudflare deploys do not need Cargo,
+wasm-pack, or the sibling Rust checkout. Refresh it locally with:
+
+  pnpm run refresh:wasm
+EOF
