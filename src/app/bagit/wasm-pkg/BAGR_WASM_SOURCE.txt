@@ -1,4 +1,4 @@
-Generated from ../bagr-wasm at commit b95d4b3.
+Generated from ../bagr-wasm at commit e560cb2.
 
 This package is copied into the app so Cloudflare deploys do not need Cargo,
 wasm-pack, or the sibling Rust checkout. Refresh it locally with:
